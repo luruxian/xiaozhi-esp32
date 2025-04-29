@@ -1,11 +1,11 @@
 menu "Xiaozhi Assistant"
 
-config OTA_VERSION_URL
-    string "OTA Version URL"
-    default "http://47.98.194.102:8002/xiaozhi/ota/"
+config OTA_URL
+    string "Default OTA URL"
+    default "http://192.168.0.107:8002/xiaozhi/ota/"
     help
-        The application will access this URL to check for updates.
-
+        The application will access this URL to check for new firmwares and server address.
+    
 
 choice
     prompt "语言选择"
@@ -22,32 +22,6 @@ choice
     config LANGUAGE_JA_JP
         bool "Japanese"
 endchoice
-
-
-choice CONNECTION_TYPE
-    prompt "Connection Type"
-    default CONNECTION_TYPE_MQTT_UDP
-    help
-        网络数据传输协议
-    config CONNECTION_TYPE_MQTT_UDP
-        bool "MQTT + UDP"
-    config CONNECTION_TYPE_WEBSOCKET
-        bool "Websocket"
-endchoice
-
-config WEBSOCKET_URL
-    depends on CONNECTION_TYPE_WEBSOCKET
-    string "Websocket URL"
-    default "ws://47.98.194.102:8000/xiaozhi/v1/"
-    help
-        Communication with the server through websocket after wake up.
-
-config WEBSOCKET_ACCESS_TOKEN
-    depends on CONNECTION_TYPE_WEBSOCKET
-    string "Websocket Access Token"
-    default "test-token"
-    help
-        Access token for websocket communication.
 
 choice BOARD_TYPE
     prompt "Board Type"

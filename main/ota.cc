@@ -2,6 +2,7 @@
 #include "system_info.h"
 #include "settings.h"
 #include "assets/lang_config.h"
+#include "sdkconfig.h"  // 添加这行
 
 #include <cJSON.h>
 #include <esp_log.h>
@@ -78,6 +79,7 @@ bool Ota::CheckVersion() {
     // Check if there is a new firmware version available
     current_version_ = app_desc->version;
     ESP_LOGI(TAG, "Current version: %s", current_version_.c_str());
+    ESP_LOGI(TAG, "check_version_url_: %s", check_version_url_.c_str());
 
     if (check_version_url_.length() < 10) {
         ESP_LOGE(TAG, "Check version URL is not properly set");

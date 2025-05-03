@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 set(PROJECT_VER "1.6.1")
-
+set(EXTRA_COMPONENT_DIRS $ENV{ADF_PATH}/components)
 # Add this line to disable the specific warning
 add_compile_options(-Wno-missing-field-initializers)
 

@@ -19,15 +19,24 @@ McpServer::McpServer() {
     AddCommonTools();
 }
 
+McpServer::~McpServer() {
+    for (auto tool : tools_) {
+        delete tool;
+    }
+    tools_.clear();
+}
+
 void McpServer::AddCommonTools() {
+    auto& board = Board::GetInstance();
+
     AddTool("self.get_device_status",
         "Provides the real-time information of the device, including the current status of the audio speaker, screen, battery, network, etc.\n"
         "Use this tool for: \n"
         "1. Answering questions about current condition (e.g. what is the current volume of the audio speaker?)\n"
         "2. As the first step to control the device (e.g. turn up / down the volume of the audio speaker, etc.)",
         PropertyList(),
-        [](const PropertyList& properties) -> ReturnValue {
-            return Board::GetInstance().GetDeviceStatusJson();
+        [&board](const PropertyList& properties) -> ReturnValue {
+            return board.GetDeviceStatusJson();
         });
 
     AddTool("self.audio_speaker.set_volume", 
@@ -35,47 +44,67 @@ void McpServer::AddCommonTools() {
         PropertyList({
             Property("volume", kPropertyTypeInteger, 0, 100)
         }), 
-        [](const PropertyList& properties) -> ReturnValue {
-            auto codec = Board::GetInstance().GetAudioCodec();
+        [&board](const PropertyList& properties) -> ReturnValue {
+            auto codec = board.GetAudioCodec();
             codec->SetOutputVolume(properties["volume"].value<int>());
             return true;
         });
     
-    AddTool("self.screen.set_brightness",
-        "Set the brightness of the screen.",
-        PropertyList({
-            Property("brightness", kPropertyTypeInteger, 0, 100)
-        }),
-        [](const PropertyList& properties) -> ReturnValue {
-            uint8_t brightness = static_cast<uint8_t>(properties["brightness"].value<int>());
-            auto backlight = Board::GetInstance().GetBacklight();
-            if (backlight) {
+    auto backlight = board.GetBacklight();
+    if (backlight) {
+        AddTool("self.screen.set_brightness",
+            "Set the brightness of the screen.",
+            PropertyList({
+                Property("brightness", kPropertyTypeInteger, 0, 100)
+            }),
+            [backlight](const PropertyList& properties) -> ReturnValue {
+                uint8_t brightness = static_cast<uint8_t>(properties["brightness"].value<int>());
                 backlight->SetBrightness(brightness, true);
-            }
-            return true;
-        });
+                return true;
+            });
+    }
 
-    AddTool("self.screen.set_theme",
-        "Set the theme of the screen. The theme can be 'light' or 'dark'.",
-        PropertyList({
-            Property("theme", kPropertyTypeString)
-        }),
-        [](const PropertyList& properties) -> ReturnValue {
-            auto display = Board::GetInstance().GetDisplay();
-            if (display) {
+    auto display = board.GetDisplay();
+    if (display && !display->GetTheme().empty()) {
+        AddTool("self.screen.set_theme",
+            "Set the theme of the screen. The theme can be `light` or `dark`.",
+            PropertyList({
+                Property("theme", kPropertyTypeString)
+            }),
+            [display](const PropertyList& properties) -> ReturnValue {
                 display->SetTheme(properties["theme"].value<std::string>().c_str());
-            }
-            return true;
-        });
-        
+                return true;
+            });
+    }
+
+    auto camera = board.GetCamera();
+    if (camera) {
+        AddTool("self.camera.take_photo",
+            "Take a photo and explain it. Use this tool after the user asks you to see something.\n"
+            "Args:\n"
+            "  `question`: The question that you want to ask about the photo.\n"
+            "Return:\n"
+            "  A JSON object that provides the photo information.",
+            PropertyList({
+                Property("question", kPropertyTypeString)
+            }),
+            [camera](const PropertyList& properties) -> ReturnValue {
+                if (!camera->Capture()) {
+                    return "{\"success\": false, \"message\": \"Failed to capture photo\"}";
+                }
+                auto question = properties["question"].value<std::string>();
+                return camera->Explain(question);
+            });
+    }
 }
 
 void McpServer::AddTool(McpTool* tool) {
+    ESP_LOGI(TAG, "Add tool: %s", tool->name().c_str());
     tools_.push_back(tool);
 }
 
 void McpServer::AddTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback) {
-    tools_.push_back(new McpTool(name, description, properties, callback));
+    AddTool(new McpTool(name, description, properties, callback));
 }
 
 void McpServer::ParseMessage(const std::string& message) {
@@ -86,6 +115,25 @@ void McpServer::ParseMessage(const std::string& message) {
     }
     ParseMessage(json);
     cJSON_Delete(json);
+}
+
+void McpServer::ParseCapabilities(const cJSON* capabilities) {
+    auto vision = cJSON_GetObjectItem(capabilities, "vision");
+    if (cJSON_IsObject(vision)) {
+        auto url = cJSON_GetObjectItem(vision, "url");
+        auto token = cJSON_GetObjectItem(vision, "token");
+        if (cJSON_IsString(url)) {
+            auto camera = Board::GetInstance().GetCamera();
+            if (camera) {
+                std::string url_str = std::string(url->valuestring);
+                std::string token_str;
+                if (cJSON_IsString(token)) {
+                    token_str = std::string(token->valuestring);
+                }
+                camera->SetExplainUrl(url_str, token_str);
+            }
+        }
+    }
 }
 
 void McpServer::ParseMessage(const cJSON* json) {
@@ -123,9 +171,17 @@ void McpServer::ParseMessage(const cJSON* json) {
     auto id_int = id->valueint;
     
     if (method_str == "initialize") {
+        if (cJSON_IsObject(params)) {
+            auto capabilities = cJSON_GetObjectItem(params, "capabilities");
+            if (cJSON_IsObject(capabilities)) {
+                ParseCapabilities(capabilities);
+            }
+        }
         auto app_desc = esp_app_get_description();
-        ReplyResult(id_int, "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},"
-            "\"serverInfo\":{\"name\":\"" BOARD_NAME "\",\"version\":\"" + std::string(app_desc->version) + "\"}}");
+        std::string message = "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"" BOARD_NAME "\",\"version\":\"";
+        message += app_desc->version;
+        message += "\"}}";
+        ReplyResult(id_int, message);
     } else if (method_str == "tools/list") {
         std::string cursor_str = "";
         if (params != nullptr) {
@@ -161,18 +217,24 @@ void McpServer::ParseMessage(const cJSON* json) {
 }
 
 void McpServer::ReplyResult(int id, const std::string& result) {
-    std::string payload = "{\"jsonrpc\":\"2.0\",\"id\":" + std::to_string(id) + ",\"result\":" + result + "}";
+    std::string payload = "{\"jsonrpc\":\"2.0\",\"id\":";
+    payload += std::to_string(id) + ",\"result\":";
+    payload += result;
+    payload += "}";
     Application::GetInstance().SendMcpMessage(payload);
 }
 
 void McpServer::ReplyError(int id, const std::string& message) {
     std::string payload = "{\"jsonrpc\":\"2.0\",\"id\":";
-    payload += std::to_string(id) + ",\"error\":{\"message\":\"" + message + "\"}}";
+    payload += std::to_string(id);
+    payload += ",\"error\":{\"message\":\"";
+    payload += message;
+    payload += "\"}}";
     Application::GetInstance().SendMcpMessage(payload);
 }
 
 void McpServer::GetToolsList(int id, const std::string& cursor) {
-    const int max_payload_size = 1400; // ML307 MQTT publish size limit
+    const int max_payload_size = 8000;
     std::string json = "{\"tools\":[";
     
     bool found_cursor = cursor.empty();
